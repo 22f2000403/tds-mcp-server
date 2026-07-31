@@ -1,100 +1,41 @@
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
 import hashlib
-import json
-
-
-app = FastAPI()
+from fastapi import Request
+from mcp.server.fastmcp import FastMCP
 
 EMAIL = "22f2000403@ds.study.iitm.ac.in"
 
+mcp = FastMCP(
+    "Challenge Server",
+    stateless_http=True,
+    json_response=True,
+)
 
-@app.post("/")
-async def mcp_endpoint(request: Request):
-
-    body = await request.json()
-
-    method = body.get("method")
-
-
-    # MCP initialize handshake
-    if method == "initialize":
-        return JSONResponse({
-            "jsonrpc": "2.0",
-            "id": body.get("id"),
-            "result": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {
-                    "tools": {}
-                },
-                "serverInfo": {
-                    "name": "challenge-server",
-                    "version": "1.0.0"
-                }
-            }
-        })
+_request: Request | None = None
 
 
-    # initialized notification
-    if method == "notifications/initialized":
-        return JSONResponse({})
+@mcp.custom_route("/", methods=["POST"])
+async def capture_request(request: Request, call_next):
+    global _request
+    _request = request
+    return await call_next(request)
 
 
-    # tools/list
-    if method == "tools/list":
-        return JSONResponse({
-            "jsonrpc": "2.0",
-            "id": body.get("id"),
-            "result": {
-                "tools": [
-                    {
-                        "name": "solve_challenge",
-                        "description": "Solve exam challenge",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {}
-                        }
-                    }
-                ]
-            }
-        })
+@mcp.tool()
+def solve_challenge() -> str:
+    """
+    Solve the exam challenge.
+    """
+
+    if _request is None:
+        return ""
+
+    challenge = _request.headers.get("X-Exam-Challenge", "")
+
+    answer = hashlib.sha256(
+        f"{challenge}:{EMAIL.lower().strip()}".encode()
+    ).hexdigest()[:16]
+
+    return answer
 
 
-    # tools/call
-    if method == "tools/call":
-
-        headers = request.headers
-
-        challenge = headers.get("x-exam-challenge")
-
-
-        if not challenge:
-            return JSONResponse({
-                "error": "Missing challenge header"
-            })
-
-
-        value = f"{challenge}:{EMAIL.strip().lower()}"
-
-        result = hashlib.sha256(
-            value.encode()
-        ).hexdigest()[:16]
-
-
-        return JSONResponse({
-            "jsonrpc": "2.0",
-            "id": body.get("id"),
-            "result": {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": result
-                    }
-                ]
-            }
-        })
-
-
-    return JSONResponse({
-        "error": "Unknown method"
-    })
+app = mcp.streamable_http_app()
